@@ -1,0 +1,178 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <title>Winston 的迷宫竞赛</title>
+    <style>
+        body { background-color: #000; display: flex; flex-direction: column; align-items: center; justify-content: center; height: 100vh; margin: 0; overflow: hidden; color: white; font-family: sans-serif; }
+        canvas { border: 2px solid #555; background-color: #111; }
+        .ui { position: absolute; top: 10px; text-align: center; width: 100%; pointer-events: none; }
+        .stats { font-size: 24px; color: #f1c40f; margin-bottom: 5px; }
+        #leaderboard { position: absolute; right: 20px; top: 80px; background: rgba(0,0,0,0.7); padding: 15px; border-radius: 8px; border: 1px solid #444; width: 180px; }
+        #leaderboard h3 { margin-top: 0; color: #2ecc71; font-size: 18px; }
+        #leaderboard ol { padding-left: 25px; margin: 0; color: #ddd; }
+        .win-overlay { position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.8); display: none; flex-direction: column; align-items: center; justify-content: center; z-index: 100; }
+        .win-content { background: #333; padding: 30px; border-radius: 15px; text-align: center; border: 2px solid #2ecc71; }
+        button { padding: 10px 20px; cursor: pointer; background: #2ecc71; border: none; color: white; border-radius: 5px; font-size: 16px; margin-top: 10px; }
+    </style>
+</head>
+<body>
+
+    <div class="ui">
+        <div class="stats">⏱ 时间: <span id="timer">0.0</span>s</div>
+        <div id="status">找到红色的出口！</div>
+    </div>
+
+    <div id="leaderboard">
+        <h3>🏆 英雄榜</h3>
+        <ol id="rankList"></ol>
+    </div>
+
+    <div id="winOverlay" class="win-overlay">
+        <div class="win-content">
+            <h1 style="color:#2ecc71">挑战成功！</h1>
+            <p id="finalResult"></p>
+            <button onclick="location.reload()">再玩一次</button>
+        </div>
+    </div>
+
+    <canvas id="mazeCanvas"></canvas>
+
+<script>
+    const canvas = document.getElementById('mazeCanvas');
+    const ctx = canvas.getContext('2d');
+    
+    // --- 配置 ---
+    const TILE_SIZE = 25; 
+    const COLS = 31;      
+    const ROWS = 25;      
+    const VISION = 85;    
+
+    canvas.width = COLS * TILE_SIZE;
+    canvas.height = ROWS * TILE_SIZE;
+
+    let maze = [];
+    let player = { x: 1, y: 1 };
+    const start = { x: 1, y: 1 };
+    const exit = { x: COLS - 2, y: ROWS - 2 };
+
+    let startTime = null;
+    let timerInterval = null;
+    let isGameOver = false;
+
+    // --- 1. 生成迷宫 ---
+    function initMaze() {
+        for (let y = 0; y < ROWS; y++) maze[y] = new Array(COLS).fill(1);
+        function carve(x, y) {
+            maze[y][x] = 0;
+            const dirs = [[0,2],[0,-2],[2,0],[-2,0]].sort(()=>Math.random()-0.5);
+            for(let [dx, dy] of dirs) {
+                let nx = x + dx, ny = y + dy;
+                if(nx > 0 && nx < COLS-1 && ny > 0 && ny < ROWS-1 && maze[ny][nx] === 1) {
+                    maze[y + dy/2][x + dx/2] = 0;
+                    carve(nx, ny);
+                }
+            }
+        }
+        carve(1, 1);
+        maze[exit.y][exit.x] = 0;
+        updateLeaderboardDisplay();
+    }
+
+    // --- 2. 计时器逻辑 ---
+    function startTimer() {
+        if (!startTime) {
+            startTime = Date.now();
+            timerInterval = setInterval(() => {
+                const elapsed = (Date.now() - startTime) / 1000;
+                document.getElementById('timer').innerText = elapsed.toFixed(1);
+            }, 100);
+        }
+    }
+
+    // --- 3. 排名逻辑 (LocalStorage) ---
+    function saveScore(time) {
+        const name = prompt("你太棒了！请输入你的名字来记录成绩：") || "匿名英雄";
+        let scores = JSON.parse(localStorage.getItem('mazeScores') || '[]');
+        scores.push({ name, time: parseFloat(time) });
+        // 按时间从短到长排序
+        scores.sort((a, b) => a.time - b.time);
+        // 只保留前5名
+        scores = scores.slice(0, 5);
+        localStorage.setItem('mazeScores', JSON.stringify(scores));
+        updateLeaderboardDisplay();
+    }
+
+    function updateLeaderboardDisplay() {
+        const scores = JSON.parse(localStorage.getItem('mazeScores') || '[]');
+        const list = document.getElementById('rankList');
+        list.innerHTML = scores.map(s => `<li>${s.name}: ${s.time}s</li>`).join('');
+    }
+
+    // --- 4. 渲染 ---
+    function render() {
+        ctx.fillStyle = "#111";
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+        
+        for (let y = 0; y < ROWS; y++) {
+            for (let x = 0; x < COLS; x++) {
+                if (maze[y][x] === 0) {
+                    ctx.fillStyle = "#222";
+                    ctx.fillRect(x * TILE_SIZE, y * TILE_SIZE, TILE_SIZE, TILE_SIZE);
+                }
+            }
+        }
+
+        const px = player.x * TILE_SIZE + TILE_SIZE/2;
+        const py = player.y * TILE_SIZE + TILE_SIZE/2;
+
+        ctx.save();
+        ctx.beginPath();
+        ctx.rect(0, 0, canvas.width, canvas.height);
+        ctx.arc(px, py, VISION, 0, Math.PI * 2, true);
+        ctx.fillStyle = "black";
+        ctx.fill();
+        ctx.restore();
+
+        // 玩家
+        ctx.fillStyle = "#00bfff";
+        ctx.beginPath(); ctx.arc(px, py, TILE_SIZE/3, 0, Math.PI*2); ctx.fill();
+
+        // 终点和起点
+        ctx.fillStyle = "#2ecc71"; ctx.fillRect(start.x * TILE_SIZE + 5, start.y * TILE_SIZE + 5, TILE_SIZE - 10, TILE_SIZE - 10);
+        ctx.fillStyle = "#ff4757"; ctx.fillRect(exit.x * TILE_SIZE + 5, exit.y * TILE_SIZE + 5, TILE_SIZE - 10, TILE_SIZE - 10);
+    }
+
+    // --- 5. 控制 ---
+    window.addEventListener('keydown', (e) => {
+        if(isGameOver) return;
+        if(["ArrowUp","ArrowDown","ArrowLeft","ArrowRight"].includes(e.key)) {
+            e.preventDefault();
+            startTimer(); // 第一次按键开始计时
+        }
+
+        let nx = player.x, ny = player.y;
+        if (e.key === 'ArrowUp') ny--;
+        else if (e.key === 'ArrowDown') ny++;
+        else if (e.key === 'ArrowLeft') nx--;
+        else if (e.key === 'ArrowRight') nx++;
+
+        if (maze[ny] && maze[ny][nx] === 0) {
+            player.x = nx; player.y = ny;
+            render();
+            if (player.x === exit.x && player.y === exit.y) {
+                isGameOver = true;
+                clearInterval(timerInterval);
+                const finalTime = document.getElementById('timer').innerText;
+                document.getElementById('finalResult').innerText = `你的成绩是：${finalTime} 秒`;
+                document.getElementById('winOverlay').style.display = 'flex';
+                setTimeout(() => saveScore(finalTime), 500);
+            }
+        }
+    });
+
+    initMaze();
+    render();
+</script>
+</body>
+</html>
